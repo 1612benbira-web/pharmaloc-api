@@ -81,13 +81,14 @@ describe("Création de commande", () => {
         expect(await Order.countDocuments()).toBe(0);
     });
 
-    it("20 commandes simultanées sur 5 unités : exactement 5 réussissent, jamais de stock négatif", async () => {
+        it("20 commandes simultanées sur 5 unités : exactement 5 réussissent, jamais de stock négatif", async () => {
         const s = await shop(5);
-        const results = await Promise.all(Array.from({ length: 20 }, () => placeOrder(s, 1)));
+        const patients = await Promise.all(Array.from({ length: 20 }, () => loginAs(app, request, "patient")));
+        const results = await Promise.all(patients.map((p) => p.agent.post("/api/orders").send(orderBody(s, 1))));
         expect(results.filter((r) => r.status === 201)).toHaveLength(5);
         expect(await qty(s)).toBe(0);
         expect(await Order.countDocuments()).toBe(5);
-    });
+    }, 30000);
 
     it("produit sans prix : refusé", async () => {
         const s = await shop(10);

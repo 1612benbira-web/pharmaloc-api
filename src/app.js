@@ -2,7 +2,10 @@ const express = require("express");
 const mongoose = require("mongoose");
 const { notFound, errorHandler } = require("./middlewares/errorHandler");
 const originCheck = require("./middlewares/originCheck");
-const { allowedOrigins } = require("./config/env");
+const cors = require("./middlewares/cors");
+const securityHeaders = require("./middlewares/securityHeaders");
+const { createLimiters } = require("./middlewares/rateLimit");
+const { allowedOrigins, isProduction, trustProxy, rateLimitEnabled } = require("./config/env");
 
 const medicineRoutes = require("./routes/medicineRoutes");
 const pharmacyRoutes = require("./routes/pharmacyRoutes");
@@ -17,12 +20,24 @@ const shipmentRoutes = require("./routes/shipmentRoutes");
 const { lotRouter, supplierRouter, orderRouter, replenishmentRouter, alertRouter } = require("./routes/inventoryRoutes");
 
 // Fabrique l'application sans la démarrer (indispensable pour les tests).
-function createApp() {
+// options.allowedOrigins et options.rateLimit servent aux tests ; en temps normal, tout vient de la configuration.
+function createApp(options = {}) {
+    const origins = options.allowedOrigins || allowedOrigins;
+    const limiters = createLimiters({ enabled: rateLimitEnabled, ...options.rateLimit });
+
     const app = express();
     app.disable("x-powered-by");
+    if (trustProxy > 0) app.set("trust proxy", trustProxy);
+
+    app.use(securityHeaders({ isProduction }));
+    app.use(cors(origins));
+    app.use(originCheck(origins));
+    app.use("/api", limiters.global);
     app.use(express.json({ limit: "100kb" }));
 
-    app.use(originCheck(allowedOrigins));
+    // Les limiteurs de connexion et d'inscription passent AVANT les routes (et avant la validation).
+    app.use("/api/auth/login", limiters.loginByIp, limiters.loginByAccount);
+    app.use("/api/auth/register", limiters.register);
 
     app.use("/api/auth", authRoutes);
     app.use("/api/admin", adminRoutes);

@@ -6,6 +6,9 @@ const { idempotencyHeader } = require("../validators/stockValidators");
 
 // Express 5 transmet automatiquement les erreurs async à errorHandler : pas de try/catch.
 
+// Chaque commande non payée immobilise du stock pendant 30 minutes : on limite leur nombre par patient.
+const MAX_OPEN_ORDERS = 5;
+
 async function listOrders(res, scope, { page, limit }) {
     const [orders, total] = await Promise.all([
         Order.find(scope).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit),
@@ -17,6 +20,21 @@ async function listOrders(res, scope, { page, limit }) {
 
 const createOrder = async (req, res) => {
     const key = idempotencyHeader.parse(req.get("Idempotency-Key"));
+
+    // Un rejeu (même clé) n'est jamais bloqué : il ne crée rien de nouveau.
+    const isReplay = key ? Boolean(await Order.exists({ idempotencyKey: key })) : false;
+    if (!isReplay) {
+        await orderService.expireOverdueOrders({ user: req.user._id }); // les commandes échues ne comptent pas
+        const open = await Order.countDocuments({ user: req.user._id, status: "PAYMENT_PENDING" });
+        if (open >= MAX_OPEN_ORDERS) {
+            throw new AppError(
+                429,
+                `Vous avez déjà ${MAX_OPEN_ORDERS} commandes en attente de paiement : payez-en une ou annulez-en une avant d'en créer une autre`,
+                "TOO_MANY_OPEN_ORDERS"
+            );
+        }
+    }
+
     const { order, replayed } = await orderService.createOrder({ user: req.user, body: req.valid.body, idempotencyKey: key });
     res.status(replayed ? 200 : 201).json({
         message: replayed ? "Commande déjà enregistrée" : "Commande créée : stock réservé, paiement attendu",

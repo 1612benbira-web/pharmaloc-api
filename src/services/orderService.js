@@ -9,7 +9,8 @@ const AppError = require("../utils/AppError");
 const { recordMovement } = require("./lotService");
 const { applyMovement } = require("./stockService");
 const { canAccessPharmacy } = require("./accessService");
-const { computeTotals, canTransition } = require("../domain/orderFlow");
+const shipmentService = require("./shipmentService");
+const { computeTotals, canTransition, managedByShipment } = require("../domain/orderFlow");
 
 const DELIVERY_FEE = 750; // FCFA, fixe pour l'instant
 const RESERVATION_TTL_MS = 30 * 60 * 1000;
@@ -108,7 +109,7 @@ async function releaseOrderStock(order, performedBy, now = new Date()) {
 }
 
 async function createOrder({ user, body, idempotencyKey }) {
-    const { pharmacy, items, fulfillment, deliveryAddress } = body;
+    const { pharmacy, items, fulfillment, deliveryAddress, contactPhone } = body;
 
     if (idempotencyKey) {
         const existing = await Order.findOne({ idempotencyKey });
@@ -123,7 +124,7 @@ async function createOrder({ user, body, idempotencyKey }) {
     try {
         order = await Order.create({
             user: user._id, pharmacy, items: lines, fulfillment,
-            ...(fulfillment === "DELIVERY" ? { deliveryAddress } : {}),
+            ...(fulfillment === "DELIVERY" ? { deliveryAddress, contactPhone } : {}),
             ...totals,
             reservationExpiresAt: new Date(Date.now() + RESERVATION_TTL_MS),
             ...(idempotencyKey ? { idempotencyKey } : {})
@@ -200,12 +201,21 @@ async function updateStatus({ orderId, user, to }) {
     if (!canTransition(order.status, to, order.fulfillment)) {
         throw new AppError(409, `Passage de ${order.status} à ${to} impossible pour cette commande`, "INVALID_TRANSITION");
     }
+    if (managedByShipment(order.fulfillment, to)) {
+        throw new AppError(409, "Pour une livraison à domicile, la remise et la livraison sont gérées par le livreur", "MANAGED_BY_SHIPMENT");
+    }
     const updated = await Order.findOneAndUpdate(
         { _id: order._id, status: order.status },
         { status: to },
         { returnDocument: "after" }
     );
     if (!updated) throw new AppError(409, "La commande vient d'être modifiée : réessayez", "ORDER_CHANGED");
+
+    // Commande de livraison prête : elle devient disponible pour les livreurs de la pharmacie.
+    // (idempotent : une course déjà ouverte pour cette commande est simplement renvoyée)
+    if (to === "READY" && updated.fulfillment === "DELIVERY") {
+        await shipmentService.createForOrder(updated);
+    }
     return updated;
 }
 

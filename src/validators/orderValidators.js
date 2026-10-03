@@ -12,11 +12,15 @@ const createOrderBody = z
             .min(1, "Au moins un article")
             .max(30, "30 articles maximum"),
         fulfillment: z.enum(["PICKUP", "DELIVERY"]),
-        deliveryAddress: z.string().trim().min(5).max(300).optional()
+        deliveryAddress: z.string().trim().min(5).max(300).optional(),
+        contactPhone: z.string().trim().regex(/^\+?[0-9 ]{8,15}$/, "Numéro de téléphone invalide").optional()
     })
     .superRefine((b, ctx) => {
         if (b.fulfillment === "DELIVERY" && !b.deliveryAddress) {
             ctx.addIssue({ code: "custom", path: ["deliveryAddress"], message: "Adresse de livraison obligatoire" });
+        }
+        if (b.fulfillment === "DELIVERY" && !b.contactPhone) {
+            ctx.addIssue({ code: "custom", path: ["contactPhone"], message: "Téléphone obligatoire pour une livraison" });
         }
         const ids = b.items.map((i) => i.medicine);
         if (new Set(ids).size !== ids.length) {

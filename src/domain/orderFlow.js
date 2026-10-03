@@ -22,10 +22,15 @@ function canTransition(from, to, fulfillment) {
     return true;
 }
 
+// Pour une livraison à domicile, la remise au livreur et la livraison appartiennent au livreur
+// (course + code de remise) : le personnel ne peut pas les poser à sa place.
+const managedByShipment = (fulfillment, to) =>
+    fulfillment === "DELIVERY" && (to === "OUT_FOR_DELIVERY" || to === "COMPLETED");
+
 function computeTotals(lines, fulfillment, deliveryFee) {
     const itemsTotal = lines.reduce((sum, l) => sum + l.unitPrice * l.quantity, 0);
     const fee = fulfillment === "DELIVERY" ? deliveryFee : 0;
     return { itemsTotal, deliveryFee: fee, total: itemsTotal + fee };
 }
 
-module.exports = { TRANSITIONS, STAFF_TARGETS, canTransition, computeTotals };
+module.exports = { TRANSITIONS, STAFF_TARGETS, canTransition, managedByShipment, computeTotals };

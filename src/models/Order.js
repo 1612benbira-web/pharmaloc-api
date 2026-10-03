@@ -24,6 +24,8 @@ const orderSchema = new mongoose.Schema(
 
         fulfillment: { type: String, enum: ["PICKUP", "DELIVERY"], required: true },
         deliveryAddress: { type: String, trim: true, maxlength: 300 },
+        // Téléphone où joindre le client pour la livraison (livraison à domicile uniquement).
+        contactPhone: { type: String, trim: true, maxlength: 20 },
 
         itemsTotal: { type: Number, required: true, min: 0 },
         deliveryFee: { type: Number, default: 0, min: 0 },

@@ -19,11 +19,11 @@ const userSchema = new mongoose.Schema(
 
         role: {
             type: String,
-            enum: ["patient", "pharmacist", "pharmacy_manager", "admin"],
+            enum: ["patient", "pharmacist", "pharmacy_manager", "courier", "admin"],
             default: "patient"
         },
 
-        // Pharmacies auxquelles le personnel est affecté (vide pour un patient ou un admin)
+        // Pharmacies auxquelles le personnel ou le livreur est affecté (vide pour un patient ou un admin)
         pharmacies: [{ type: mongoose.Schema.Types.ObjectId, ref: "Pharmacy" }],
 
         isActive: { type: Boolean, default: true },

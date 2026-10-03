@@ -45,10 +45,11 @@ describe("Création de commande", () => {
         expect(await qty(s)).toBe(8);
     });
 
-    it("livraison : frais ajoutés, adresse obligatoire", async () => {
+        it("livraison : frais ajoutés, adresse et téléphone obligatoires", async () => {
         const s = await shop(10, 1000);
         expect((await placeOrder(s, 1, { fulfillment: "DELIVERY" })).status).toBe(400);
-        const res = await placeOrder(s, 1, { fulfillment: "DELIVERY", deliveryAddress: "Pikine, Dakar" });
+        expect((await placeOrder(s, 1, { fulfillment: "DELIVERY", deliveryAddress: "Pikine, Dakar" })).status).toBe(400);
+        const res = await placeOrder(s, 1, { fulfillment: "DELIVERY", deliveryAddress: "Pikine, Dakar", contactPhone: "770000011" });
         expect(res.status).toBe(201);
         expect(res.body.order.deliveryFee).toBe(750);
         expect(res.body.order.total).toBe(1750);
@@ -359,13 +360,14 @@ describe("Préparation par la pharmacie", () => {
         expect((await s.setStatus("PREPARING")).status).toBe(409);
     });
 
-    it("livraison : doit passer par OUT_FOR_DELIVERY", async () => {
-        const s = await paid({ fulfillment: "DELIVERY", deliveryAddress: "Pikine, Dakar" });
-        await s.setStatus("PREPARING");
-        await s.setStatus("READY");
+        it("livraison : le personnel prépare, mais ne remet ni ne clôt la livraison à la place du livreur", async () => {
+        const s = await paid({ fulfillment: "DELIVERY", deliveryAddress: "Pikine, Dakar", contactPhone: "770000011" });
+        expect((await s.setStatus("PREPARING")).status).toBe(200);
+        expect((await s.setStatus("READY")).status).toBe(200);
+        const handover = await s.setStatus("OUT_FOR_DELIVERY");
+        expect(handover.status).toBe(409);
+        expect(handover.body.code).toBe("MANAGED_BY_SHIPMENT");
         expect((await s.setStatus("COMPLETED")).status).toBe(409);
-        expect((await s.setStatus("OUT_FOR_DELIVERY")).status).toBe(200);
-        expect((await s.setStatus("COMPLETED")).status).toBe(200);
     });
 
     it("le patient ne peut pas faire avancer sa commande ; une autre pharmacie non plus", async () => {

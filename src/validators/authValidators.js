@@ -12,7 +12,7 @@ const createStaffBody = z.object({
     name: z.string().trim().min(2).max(120),
     email,
     password,
-    role: z.enum(["pharmacist", "pharmacy_manager", "admin"]),
+    role: z.enum(["pharmacist", "pharmacy_manager", "courier", "admin"]),
     pharmacies: z.array(objectId).max(50).default([])
 });
 

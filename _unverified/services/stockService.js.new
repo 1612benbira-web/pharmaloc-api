@@ -1,0 +1,215 @@
+const crypto = require("crypto");
+const Stock = require("../models/Stock");
+const StockMovement = require("../models/StockMovement");
+const MedicineLot = require("../models/MedicineLot");
+const AppError = require("../utils/AppError");
+const { INCREASING, DECREASING } = require("../constants/movements");
+const { planFefo, endOfDayUTC } = require("./lotRules");
+
+const MAX_FEFO_ATTEMPTS = 4;
+
+/**
+ * Applique un mouvement de stock de façon atomique et idempotente.
+ *
+ * Étapes :
+ *  1. Réserver le mouvement (PENDING) : la clé d'idempotence est unique, donc un doublon
+ *     ou une requête concurrente identique est détecté ici.
+ *  2. Modifier les quantités par des $inc conditionnels (une sortie ne réussit que si la
+ *     quantité suffit) : MongoDB garantit l'atomicité par document.
+ *  3. Marquer le mouvement APPLIED avec les quantités avant/après et les lots touchés.
+ *
+ * Stock suivi par lots (tracksLots) :
+ *  - entrée : lot { lotNumber, expiryDate } obligatoire (créé ou incrémenté) ;
+ *  - vente (OUT) : FEFO automatique sur les lots vendables (jamais périmés ni en quarantaine) ;
+ *  - autres sorties (perte, casse, péremption, correction) : lotId obligatoire.
+ *  Les opérations sur plusieurs lots sont compensées (annulées) si une course concurrente échoue.
+ *
+ * Limite connue : un arrêt du processus en cours d'opération laisse un mouvement PENDING
+ * (détectable). Les transactions MongoDB (replica set) supprimeraient ce risque.
+ */
+async function applyMovement({
+    stockId, type, quantity, reason, idempotencyKey, delivery, purchaseOrder, performedBy, lotId, lot
+}) {
+    const increasing = INCREASING.includes(type);
+    if (!increasing && !DECREASING.includes(type)) {
+        throw new AppError(400, "Type de mouvement non pris en charge", "UNSUPPORTED_MOVEMENT_TYPE");
+    }
+
+    const stock = await Stock.findById(stockId);
+    if (!stock) throw new AppError(404, "Stock introuvable", "STOCK_NOT_FOUND");
+    validateLotInputs(stock, { type, increasing, lotId, lot });
+
+    const key = idempotencyKey || crypto.randomUUID();
+    let movement;
+    try {
+        movement = await StockMovement.create({
+            stock: stock._id, pharmacy: stock.pharmacy, medicine: stock.medicine,
+            type, quantity, reason, delivery, purchaseOrder, performedBy,
+            idempotencyKey: key, status: "PENDING"
+        });
+    } catch (err) {
+        if (err && err.code === 11000) {
+            return replayExisting(key, { stockId: stock._id, type, quantity });
+        }
+        throw err;
+    }
+
+    let allocations = [];
+    try {
+        if (!stock.tracksLots) {
+            await applyToStockOnly(stock._id, increasing, quantity);
+        } else if (increasing) {
+            allocations = await receiveIntoLot(stock, quantity, lot);
+        } else {
+            allocations = await removeFromLots(stock, { type, quantity, lotId });
+        }
+    } catch (err) {
+        if (err instanceof AppError) {
+            await StockMovement.updateOne({ _id: movement._id }, { status: "REJECTED", rejectionReason: err.code });
+        }
+        throw err;
+    }
+
+    const after = await Stock.findById(stock._id);
+    const delta = increasing ? quantity : -quantity;
+    movement.status = "APPLIED";
+    movement.stockAfter = after.quantity;
+    movement.stockBefore = after.quantity - delta;
+    movement.allocations = allocations;
+    await movement.save();
+
+    return { movement, stock: after, replayed: false };
+}
+
+function validateLotInputs(stock, { type, increasing, lotId, lot }) {
+    if (!stock.tracksLots) {
+        if (lotId || lot) {
+            throw new AppError(400, "Ce stock n'est pas suivi par lots", "LOTS_NOT_ENABLED");
+        }
+        return;
+    }
+    if (increasing) {
+        if (!lot || !lot.lotNumber || !lot.expiryDate) {
+            throw new AppError(400, "Numéro de lot et date de péremption obligatoires pour ce stock", "LOT_REQUIRED");
+        }
+        if (endOfDayUTC(lot.expiryDate) <= new Date()) {
+            throw new AppError(409, "Ce lot est déjà périmé et ne peut pas être reçu en stock", "LOT_EXPIRED");
+        }
+    } else if (type !== "OUT" && !lotId) {
+        throw new AppError(400, "Ce mouvement doit préciser le lot concerné (lotId)", "LOT_REQUIRED");
+    }
+}
+
+// Stock non suivi par lots : un seul $inc conditionnel.
+async function applyToStockOnly(stockId, increasing, quantity) {
+    const filter = { _id: stockId };
+    if (!increasing) filter.quantity = { $gte: quantity };
+    const updated = await Stock.findOneAndUpdate(filter, { $inc: { quantity: increasing ? quantity : -quantity } }, { new: true });
+    if (!updated) throw new AppError(409, "Stock insuffisant pour cette sortie", "INSUFFICIENT_STOCK");
+}
+
+// Entrée sur un stock suivi par lots : crée ou incrémente le lot, puis le stock.
+async function receiveIntoLot(stock, quantity, lotInput) {
+    const expiry = endOfDayUTC(lotInput.expiryDate);
+    const where = { pharmacy: stock.pharmacy, medicine: stock.medicine, lotNumber: lotInput.lotNumber };
+
+    let lot = await MedicineLot.findOne(where);
+    if (!lot) {
+        try {
+            lot = await MedicineLot.create({
+                ...where, stock: stock._id, expiryDate: expiry, supplier: lotInput.supplier,
+                quantityReceived: quantity, quantityRemaining: quantity
+            });
+        } catch (err) {
+            if (!(err && err.code === 11000)) throw err;
+            lot = await MedicineLot.findOne(where); // créé en parallèle par une autre requête
+            if (!lot) throw err;
+        }
+        if (lot.quantityReceived === quantity && lot.quantityRemaining === quantity && !lot.__incremented) {
+            await Stock.updateOne({ _id: stock._id }, { $inc: { quantity } });
+            return [{ lot: lot._id, quantity }];
+        }
+    }
+
+    if (Math.abs(new Date(lot.expiryDate) - expiry) > 24 * 60 * 60 * 1000) {
+        throw new AppError(409, "Ce numéro de lot existe déjà avec une autre date de péremption", "LOT_EXPIRY_MISMATCH");
+    }
+    await MedicineLot.updateOne({ _id: lot._id }, { $inc: { quantityRemaining: quantity, quantityReceived: quantity } });
+    await Stock.updateOne({ _id: stock._id }, { $inc: { quantity } });
+    return [{ lot: lot._id, quantity }];
+}
+
+// Sortie sur un stock suivi par lots : lot explicite, ou FEFO pour une vente.
+async function removeFromLots(stock, { type, quantity, lotId }) {
+    const now = new Date();
+    let applied = [];
+
+    if (lotId) {
+        const filter = { _id: lotId, stock: stock._id, quantityRemaining: { $gte: quantity } };
+        if (type === "OUT") { filter.status = "AVAILABLE"; filter.expiryDate = { $gt: now }; }
+        const lot = await MedicineLot.findOneAndUpdate(filter, { $inc: { quantityRemaining: -quantity } }, { new: true });
+        if (!lot) {
+            throw new AppError(409, type === "OUT"
+                ? "Lot introuvable, non vendable (périmé ou en quarantaine) ou quantité insuffisante"
+                : "Lot introuvable ou quantité insuffisante dans ce lot", "INSUFFICIENT_STOCK");
+        }
+        applied = [{ lot: lot._id, quantity }];
+    } else {
+        for (let attempt = 0; attempt < MAX_FEFO_ATTEMPTS; attempt++) {
+            const lots = await MedicineLot.find({ stock: stock._id, status: "AVAILABLE", expiryDate: { $gt: now }, quantityRemaining: { $gt: 0 } });
+            const { plan, shortfall } = planFefo(lots, quantity, now);
+            if (shortfall > 0) {
+                throw new AppError(409, "Stock vendable insuffisant (les lots périmés ou en quarantaine ne sont pas vendables)", "INSUFFICIENT_STOCK");
+            }
+            const done = [];
+            let failed = false;
+            for (const step of plan) {
+                const ok = await MedicineLot.findOneAndUpdate(
+                    { _id: step.lot, status: "AVAILABLE", expiryDate: { $gt: now }, quantityRemaining: { $gte: step.quantity } },
+                    { $inc: { quantityRemaining: -step.quantity } }, { new: true }
+                );
+                if (!ok) { failed = true; break; }
+                done.push(step);
+            }
+            if (!failed) { applied = done; break; }
+            // Course concurrente : on annule ce qui a été pris et on recalcule le plan.
+            await Promise.all(done.map((s) => MedicineLot.updateOne({ _id: s.lot }, { $inc: { quantityRemaining: s.quantity } })));
+        }
+        if (applied.length === 0) {
+            throw new AppError(409, "Stock vendable insuffisant ou trop de demandes simultanées, réessayez", "INSUFFICIENT_STOCK");
+        }
+    }
+
+    const ok = await Stock.findOneAndUpdate({ _id: stock._id, quantity: { $gte: quantity } }, { $inc: { quantity: -quantity } }, { new: true });
+    if (!ok) {
+        await Promise.all(applied.map((s) => MedicineLot.updateOne({ _id: s.lot }, { $inc: { quantityRemaining: s.quantity } })));
+        throw new AppError(409, "Stock insuffisant pour cette sortie", "INSUFFICIENT_STOCK");
+    }
+    return applied;
+}
+
+// Même clé déjà utilisée : on renvoie le résultat d'origine, sans rien réappliquer.
+async function replayExisting(key, { stockId, type, quantity }) {
+    const existing = await StockMovement.findOne({ idempotencyKey: key });
+
+    const samePayload =
+        existing &&
+        String(existing.stock) === String(stockId) &&
+        existing.type === type &&
+        existing.quantity === quantity;
+
+    if (!samePayload) {
+        throw new AppError(409, "Cette clé d'idempotence a déjà servi pour une autre opération", "IDEMPOTENCY_CONFLICT");
+    }
+    if (existing.status === "PENDING") {
+        throw new AppError(409, "Opération identique en cours de traitement", "OPERATION_IN_PROGRESS");
+    }
+    if (existing.status === "REJECTED") {
+        throw new AppError(409, "Cette opération a déjà été refusée", existing.rejectionReason || "REJECTED");
+    }
+
+    const stock = await Stock.findById(stockId);
+    return { movement: existing, stock, replayed: true };
+}
+
+module.exports = { applyMovement };

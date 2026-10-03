@@ -13,6 +13,7 @@ const createStockBody = z.object({
 // La quantité ne se modifie jamais par PATCH : elle passe par un mouvement traçable.
 const updateStockBody = z
     .object({
+        price: nonNegInt.optional(),
         minimumQuantity: nonNegInt.optional(),
         targetQuantity: nonNegInt.optional(),
         leadTimeDays: nonNegInt.optional(),

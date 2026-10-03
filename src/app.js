@@ -10,6 +10,8 @@ const stockRoutes = require("./routes/stockRoutes");
 const deliveryRoutes = require("./routes/deliveryRoutes");
 const authRoutes = require("./routes/authRoutes");
 const adminRoutes = require("./routes/adminRoutes");
+const orderRoutes = require("./routes/orderRoutes");
+const paymentRoutes = require("./routes/paymentRoutes");
 const { lotRouter, supplierRouter, orderRouter, replenishmentRouter, alertRouter } = require("./routes/inventoryRoutes");
 
 // Fabrique l'application sans la démarrer (indispensable pour les tests).
@@ -31,6 +33,8 @@ function createApp() {
     app.use("/api/purchase-orders", orderRouter);
     app.use("/api/replenishment", replenishmentRouter);
     app.use("/api/alerts", alertRouter);
+    app.use("/api/orders", orderRoutes);
+    app.use("/api/payments", paymentRoutes);
 
     app.get("/", (req, res) => {
         res.json({ message: "Bienvenue sur l'API PharmaLoc" });

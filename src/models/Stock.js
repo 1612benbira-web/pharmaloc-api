@@ -21,7 +21,7 @@ const stockSchema = new mongoose.Schema(
             default: 0
         },
 
-        // Prix de vente en FCFA dans cette pharmacie
+        // Prix de vente en FCFA dans cette pharmacie (obligatoire pour pouvoir commander ce produit).
         price: {
             type: Number,
             min: 0

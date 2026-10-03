@@ -17,6 +17,8 @@ export const Lot = require("../../src/models/Lot");
 export const Supplier = require("../../src/models/Supplier");
 export const PurchaseOrder = require("../../src/models/PurchaseOrder");
 export const Alert = require("../../src/models/Alert");
+export const Order = require("../../src/models/Order");
+export const Payment = require("../../src/models/Payment");
 const authService = require("../../src/services/authService");
 export const PASSWORD = "MotDePasse-Test-2026";
 
@@ -42,7 +44,7 @@ export async function startTestDb() {
         await mongoose.connect(mongod.getUri("pharmaloc_test"));
     }
     // Indispensable : crée les index uniques (idempotence) avant les tests.
-    await Promise.all([Stock, StockMovement, Delivery, User, Session, Lot, Supplier, PurchaseOrder, Alert].map((m) => m.init()));
+    await Promise.all([Stock, StockMovement, Delivery, User, Session, Lot, Supplier, PurchaseOrder, Alert, Order, Payment].map((m) => m.init()));
 }
 
 export async function stopTestDb() {
@@ -51,7 +53,7 @@ export async function stopTestDb() {
 }
 
 export async function resetDb() {
-    await Promise.all([Stock, StockMovement, Delivery, Pharmacy, Medicine, User, Session, AuditLog, Lot, Supplier, PurchaseOrder, Alert].map((m) => m.deleteMany({})));
+    await Promise.all([Stock, StockMovement, Delivery, Pharmacy, Medicine, User, Session, AuditLog, Lot, Supplier, PurchaseOrder, Alert, Order, Payment].map((m) => m.deleteMany({})));
 }
 
 export async function seedStock(quantity = 0) {

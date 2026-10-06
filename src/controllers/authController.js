@@ -10,7 +10,10 @@ const cookieOptions = (maxAge) => ({
     ...(maxAge ? { maxAge } : {})
 });
 
-const publicUser = (u) => ({ id: u._id, name: u.name, email: u.email, role: u.role, pharmacies: u.pharmacies });
+const publicUser = (u) => ({
+    id: u._id, name: u.name, email: u.email, role: u.role, pharmacies: u.pharmacies,
+    mustChangePassword: Boolean(u.mustChangePassword)
+});
 
 const register = async (req, res) => {
     const { name, email, password } = req.valid.body;
@@ -37,6 +40,14 @@ const logoutAll = async (req, res) => {
     res.status(200).json({ message: "Toutes les sessions ont été révoquées" });
 };
 
+const changePassword = async (req, res) => {
+    const { currentPassword, newPassword } = req.valid.body;
+    await authService.changePassword({
+        userId: req.user._id, currentPassword, newPassword, keepSessionId: req.session._id
+    });
+    res.status(200).json({ message: "Mot de passe modifié. Vos autres appareils ont été déconnectés." });
+};
+
 const me = (req, res) => res.status(200).json({ user: publicUser(req.user) });
 
-module.exports = { register, login, logout, logoutAll, me };
+module.exports = { register, login, logout, logoutAll, changePassword, me };

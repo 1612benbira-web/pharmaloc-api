@@ -3,6 +3,14 @@ const { findUserByToken } = require("../services/authService");
 
 const COOKIE_NAME = "pl_session";
 
+// Avec un mot de passe provisoire, SEULES ces routes restent accessibles.
+const ALLOWED_WITH_TEMPORARY_PASSWORD = new Set([
+    "GET /api/auth/me",
+    "POST /api/auth/change-password",
+    "POST /api/auth/logout",
+    "POST /api/auth/logout-all"
+]);
+
 function parseCookies(header) {
     const out = {};
     for (const part of String(header || "").split(";")) {
@@ -27,6 +35,10 @@ const authenticate = async (req, res, next) => {
     if (!found) throw new AppError(401, "Connexion requise", "UNAUTHENTICATED");
     req.user = found.user;
     req.session = found.session;
+
+    if (req.user.mustChangePassword && !ALLOWED_WITH_TEMPORARY_PASSWORD.has(`${req.method} ${req.baseUrl}${req.path}`)) {
+        throw new AppError(403, "Votre mot de passe est provisoire : changez-le avant de continuer", "PASSWORD_CHANGE_REQUIRED");
+    }
     next();
 };
 

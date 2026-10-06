@@ -16,4 +16,10 @@ const createStaffBody = z.object({
     pharmacies: z.array(objectId).max(50).default([])
 });
 
-module.exports = { registerBody, loginBody, createStaffBody };
+// Corps strict : un champ inconnu est refusé, jamais ignoré en silence.
+const changePasswordBody = z.strictObject({
+    currentPassword: z.string().min(1, "Le mot de passe actuel est obligatoire").max(128),
+    newPassword: password
+});
+
+module.exports = { registerBody, loginBody, createStaffBody, changePasswordBody };

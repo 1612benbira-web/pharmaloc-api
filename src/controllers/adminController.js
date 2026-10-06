@@ -25,7 +25,8 @@ const createStaffUser = async (req, res) => {
         throw new AppError(404, "Une des pharmacies indiquées est introuvable", "PHARMACY_NOT_FOUND");
     }
 
-    const user = await authService.createUser({ name, email, password, role, pharmacies });
+    // Mot de passe provisoire : son titulaire devra le changer avant de pouvoir utiliser l'application.
+    const user = await authService.createUser({ name, email, password, role, pharmacies, mustChangePassword: true });
     await audit.record({
         actor: req.user._id, action: "USER_CREATED", target: String(user._id),
         meta: { role, pharmacies }

@@ -14,10 +14,10 @@ const sha256 = (v) => crypto.createHash("sha256").update(v).digest("hex");
 let dummyHashPromise;
 const getDummyHash = () => (dummyHashPromise ||= hashPassword("mot-de-passe-factice-inutilisable"));
 
-async function createUser({ name, email, password, role = "patient", pharmacies = [] }) {
+async function createUser({ name, email, password, role = "patient", pharmacies = [], mustChangePassword = false }) {
     const passwordHash = await hashPassword(password);
     try {
-        return await User.create({ name, email, passwordHash, role, pharmacies });
+        return await User.create({ name, email, passwordHash, role, pharmacies, mustChangePassword });
     } catch (err) {
         if (err && err.code === 11000) {
             throw new AppError(409, "Un compte existe déjà avec cette adresse e-mail", "EMAIL_TAKEN");
@@ -37,6 +37,16 @@ async function createSession(user, userAgent) {
     return { token, maxAgeMs: SESSION_TTL_MS };
 }
 
+// Compte un échec (connexion ou changement de mot de passe) et verrouille le compte au-delà du seuil.
+async function registerFailure(userId) {
+    // $inc atomique, puis relecture du compteur (deux échecs simultanés comptent tous les deux).
+    await User.updateOne({ _id: userId }, { $inc: { failedLoginCount: 1 } });
+    const updated = await User.findById(userId);
+    if (updated.failedLoginCount >= MAX_FAILED_LOGINS) {
+        await User.updateOne({ _id: userId }, { lockUntil: new Date(Date.now() + LOCK_MS), failedLoginCount: 0 });
+    }
+}
+
 async function login(email, password, userAgent) {
     const invalid = new AppError(401, "E-mail ou mot de passe incorrect", "INVALID_CREDENTIALS");
     const user = await User.findOne({ email }).select("+passwordHash");
@@ -51,18 +61,44 @@ async function login(email, password, userAgent) {
     }
 
     if (!(await verifyPassword(password, user.passwordHash)) || !user.isActive) {
-        // $inc atomique, puis relecture du compteur (deux échecs simultanés comptent tous les deux).
-        await User.updateOne({ _id: user._id }, { $inc: { failedLoginCount: 1 } });
-        const updated = await User.findById(user._id);
-        if (updated.failedLoginCount >= MAX_FAILED_LOGINS) {
-            await User.updateOne({ _id: user._id }, { lockUntil: new Date(Date.now() + LOCK_MS), failedLoginCount: 0 });
-        }
+        await registerFailure(user._id);
         throw invalid;
     }
 
     await User.updateOne({ _id: user._id }, { failedLoginCount: 0, $unset: { lockUntil: 1 } });
     const session = await createSession(user, userAgent);
     return { user, ...session };
+}
+
+/**
+ * Changement de mot de passe par son titulaire, déjà connecté.
+ *  - le mot de passe actuel est exigé ; un mauvais essai compte comme un échec de connexion
+ *    (5 échecs verrouillent le compte), pour qu'une session volée ne serve pas à le deviner ;
+ *  - toutes les AUTRES sessions sont fermées : seule la session en cours reste ouverte.
+ */
+async function changePassword({ userId, currentPassword, newPassword, keepSessionId }) {
+    const user = await User.findById(userId).select("+passwordHash");
+    if (!user) throw new AppError(404, "Compte introuvable", "USER_NOT_FOUND");
+
+    if (user.lockUntil && user.lockUntil > new Date()) {
+        throw new AppError(429, "Compte temporairement verrouillé après trop d'échecs. Réessayez plus tard.", "ACCOUNT_LOCKED");
+    }
+    if (!(await verifyPassword(currentPassword, user.passwordHash))) {
+        await registerFailure(user._id);
+        throw new AppError(400, "Le mot de passe actuel est incorrect", "INVALID_CURRENT_PASSWORD");
+    }
+    if (await verifyPassword(newPassword, user.passwordHash)) {
+        throw new AppError(400, "Le nouveau mot de passe doit être différent de l'ancien", "PASSWORD_UNCHANGED");
+    }
+
+    await User.updateOne(
+        { _id: user._id },
+        { passwordHash: await hashPassword(newPassword), mustChangePassword: false, failedLoginCount: 0, $unset: { lockUntil: 1 } }
+    );
+    await Session.updateMany(
+        { user: user._id, _id: { $ne: keepSessionId }, revokedAt: { $exists: false } },
+        { revokedAt: new Date() }
+    );
 }
 
 // Retourne l'utilisateur d'une session valide (non expirée, non révoquée, compte actif) ou null.
@@ -82,6 +118,6 @@ const revokeAllSessions = (userId) =>
     Session.updateMany({ user: userId, revokedAt: { $exists: false } }, { revokedAt: new Date() });
 
 module.exports = {
-    createUser, login, findUserByToken, revokeSession, revokeAllSessions,
+    createUser, login, changePassword, findUserByToken, revokeSession, revokeAllSessions,
     MAX_FAILED_LOGINS
 };

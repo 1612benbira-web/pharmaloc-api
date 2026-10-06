@@ -28,6 +28,10 @@ const userSchema = new mongoose.Schema(
 
         isActive: { type: Boolean, default: true },
 
+        // true pour un compte créé par un administrateur avec un mot de passe provisoire :
+        // tant qu'il n'est pas changé, l'API refuse tout sauf le changement de mot de passe.
+        mustChangePassword: { type: Boolean, default: false },
+
         // Verrouillage après 5 échecs de connexion
         failedLoginCount: { type: Number, default: 0 },
         lockUntil: { type: Date }

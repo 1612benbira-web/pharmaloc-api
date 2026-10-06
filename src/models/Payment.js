@@ -20,8 +20,14 @@ const paymentSchema = new mongoose.Schema(
         transactionId: { type: String, trim: true },
         paidAt: { type: Date },
 
-        // Paiement reçu alors que la commande n'était plus payable (expirée, annulée) : remboursement à traiter.
+        // Paiement à traiter par un administrateur (commande expirée ou annulée : remboursement à faire).
         needsReview: { type: Boolean, default: false },
+
+        // Remboursement : demandé (verrou contre un double remboursement), puis effectué.
+        refundRequestedAt: { type: Date },
+        refundedAt: { type: Date },
+        refundReason: { type: String, trim: true, maxlength: 200 },
+        refundTransactionId: { type: String, trim: true },
 
         idempotencyKey: { type: String, trim: true }
     },
@@ -32,5 +38,6 @@ paymentSchema.index({ order: 1 }, { unique: true, partialFilterExpression: { isO
 paymentSchema.index({ transactionId: 1 }, { unique: true, sparse: true });
 paymentSchema.index({ idempotencyKey: 1 }, { unique: true, sparse: true });
 paymentSchema.index({ user: 1, createdAt: -1 });
+paymentSchema.index({ needsReview: 1, createdAt: -1 });
 
 module.exports = mongoose.model("Payment", paymentSchema);

@@ -97,4 +97,53 @@ async function settlePayment({ paymentId, outcome }) {
     return { payment: claimed, order, replayed: false };
 }
 
-module.exports = { startPayment, settlePayment };
+/**
+ * Rembourse un paiement réglé dont la commande est annulée ou expirée.
+ *  1. Le remboursement est "réservé" de façon atomique (refundRequestedAt) : deux demandes simultanées ne
+ *     peuvent pas toutes deux appeler le prestataire.
+ *  2. Le prestataire rembourse (avec une clé d'idempotence stable, pour ne jamais rembourser deux fois).
+ *  3. Le paiement passe à REFUNDED. Si le prestataire échoue, la réservation est levée et on peut réessayer.
+ * Limite connue : un arrêt brutal entre 2 et 3 laisse refundRequestedAt posé sans REFUNDED (détectable, à réconcilier).
+ */
+async function refundPayment({ paymentId, reason }) {
+    const existing = await Payment.findById(paymentId);
+    if (!existing) throw new AppError(404, "Paiement introuvable", "PAYMENT_NOT_FOUND");
+    if (existing.status === "REFUNDED") return { payment: existing, replayed: true };
+    if (existing.status !== "PAID") {
+        throw new AppError(409, "Seul un paiement réglé peut être remboursé", "PAYMENT_NOT_REFUNDABLE");
+    }
+
+    const order = await Order.findById(existing.order);
+    if (!order || !["EXPIRED", "CANCELLED"].includes(order.status)) {
+        throw new AppError(409, "La commande est encore active : annulez-la d'abord pour pouvoir rembourser", "ORDER_STILL_ACTIVE");
+    }
+
+    const provider = getProvider(existing.method); // 501 en production tant qu'aucun prestataire n'est configuré
+
+    const claimed = await Payment.findOneAndUpdate(
+        { _id: paymentId, status: "PAID", refundRequestedAt: { $exists: false } },
+        { refundRequestedAt: new Date(), refundReason: reason },
+        { returnDocument: "after" }
+    );
+    if (!claimed) throw new AppError(409, "Un remboursement est déjà en cours pour ce paiement", "REFUND_IN_PROGRESS");
+
+    let result;
+    try {
+        result = await provider.refund({
+            transactionId: claimed.transactionId, amount: claimed.amount, currency: claimed.currency,
+            idempotencyKey: `refund:${claimed._id}`
+        });
+    } catch (err) {
+        await Payment.updateOne({ _id: claimed._id }, { $unset: { refundRequestedAt: 1, refundReason: 1 } });
+        throw err;
+    }
+
+    const refunded = await Payment.findOneAndUpdate(
+        { _id: claimed._id },
+        { status: "REFUNDED", isOpen: false, needsReview: false, refundedAt: new Date(), refundTransactionId: result.refundTransactionId },
+        { returnDocument: "after" }
+    );
+    return { payment: refunded, replayed: false };
+}
+
+module.exports = { startPayment, settlePayment, refundPayment };

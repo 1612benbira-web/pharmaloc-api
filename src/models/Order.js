@@ -38,6 +38,9 @@ const orderSchema = new mongoose.Schema(
             default: "PAYMENT_PENDING"
         },
 
+        // Motif d'une annulation faite par la pharmacie ou l'administration sur une commande déjà payée.
+        cancellationReason: { type: String, trim: true, maxlength: 200 },
+
         // true une fois TOUTES les lignes réservées : une commande non réservée ne peut pas être payée.
         stockReserved: { type: Boolean, default: false },
         // Au-delà, une commande non payée expire et son stock est remis en vente.

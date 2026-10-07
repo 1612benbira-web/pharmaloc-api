@@ -6,6 +6,7 @@ const { createOrderBody, orderListQuery, updateOrderStatusBody } = require("../v
 const { cancelPaidBody } = require("../validators/refundValidators");
 const c = require("../controllers/orderController");
 const paid = require("../controllers/paidOrderController");
+const { auditAction } = require("../middlewares/audit");
 
 const router = express.Router();
 
@@ -22,6 +23,8 @@ router.post("/:id/cancel", patient, validate({ params: idParam }), c.cancelOrder
 router.patch("/:id/status", staff, validate({ params: idParam, body: updateOrderStatusBody }), c.updateOrderStatus);
 
 // Annulation d'une commande déjà payée (avec remboursement) : responsable de la pharmacie ou administrateur.
-router.post("/:id/cancel-paid", requireRole("pharmacy_manager", "admin"), validate({ params: idParam, body: cancelPaidBody }), paid.cancelPaidOrder);
+router.post("/:id/cancel-paid", requireRole("pharmacy_manager", "admin"), validate({ params: idParam, body: cancelPaidBody }),
+    auditAction("ORDER_CANCELLED_PAID", { meta: (req, body) => ({ reason: req.valid.body.reason, refund: body && body.refund && body.refund.status }) }),
+    paid.cancelPaidOrder);
 
 module.exports = router;

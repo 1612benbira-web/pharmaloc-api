@@ -10,4 +10,6 @@ const userListQuery = pagination.extend({
 });
 const userStatusBody = z.strictObject({ isActive: z.boolean() });
 
-module.exports = { STAFF_ROLES, userListQuery, userStatusBody };
+const auditListQuery = pagination.extend({ action: z.string().trim().min(2).max(60).optional() });
+
+module.exports = { STAFF_ROLES, userListQuery, userStatusBody, auditListQuery };

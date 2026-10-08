@@ -22,4 +22,11 @@ const changePasswordBody = z.strictObject({
     newPassword: password
 });
 
-module.exports = { registerBody, loginBody, createStaffBody, changePasswordBody };
+// « Mot de passe oublié » : l'e-mail, puis le jeton reçu (64 caractères hexadécimaux) et le nouveau mot de passe.
+const forgotPasswordBody = z.strictObject({ email });
+const resetPasswordBody = z.strictObject({
+    token: z.string().regex(/^[a-f0-9]{64}$/, "Lien invalide"),
+    newPassword: password
+});
+
+module.exports = { registerBody, loginBody, createStaffBody, changePasswordBody, forgotPasswordBody, resetPasswordBody };

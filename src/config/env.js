@@ -59,6 +59,16 @@ module.exports = {
     trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
     // Active par défaut ; coupée pendant les tests. RATE_LIMIT=off la coupe en développement (interdit en production).
     rateLimitEnabled: nodeEnv === "test" ? false : process.env.RATE_LIMIT !== "off",
+    // Adresse publique du site : sert à construire le lien de l'e-mail « mot de passe oublié ».
+    appUrl: (process.env.APP_URL || "http://localhost:5173").replace(/\/+$/, ""),
+    // Envoi d'e-mails (SMTP). Sans SMTP_HOST, en développement, le message s'affiche dans la console du serveur.
+    mail: {
+        host: process.env.SMTP_HOST,
+        port: Number(process.env.SMTP_PORT) || 587,
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+        from: process.env.MAIL_FROM || "PharmaLoc <no-reply@pharmaloc.local>"
+    },
     getMongoUri,
     checkProductionConfig
 };

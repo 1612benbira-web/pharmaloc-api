@@ -6,6 +6,8 @@ const { createOrderBody, orderListQuery, updateOrderStatusBody } = require("../v
 const { cancelPaidBody } = require("../validators/refundValidators");
 const c = require("../controllers/orderController");
 const paid = require("../controllers/paidOrderController");
+const stats = require("../controllers/statsController");
+const { statsQuery } = require("../validators/statsValidators");
 const { auditAction } = require("../middlewares/audit");
 
 const router = express.Router();
@@ -18,6 +20,8 @@ router.use(authenticate);
 router.post("/", patient, validate({ body: createOrderBody }), c.createOrder);
 router.get("/mine", patient, validate({ query: orderListQuery }), c.getMyOrders);
 router.get("/pharmacy", staff, validate({ query: orderListQuery }), c.getPharmacyOrders);
+// Statistiques de la pharmacie (avant "/:id" pour ne pas être prises pour un identifiant).
+router.get("/pharmacy/stats", staff, validate({ query: statsQuery }), stats.pharmacyStats);
 router.get("/:id", validate({ params: idParam }), c.getOrder);
 router.post("/:id/cancel", patient, validate({ params: idParam }), c.cancelOrder);
 router.patch("/:id/status", staff, validate({ params: idParam, body: updateOrderStatusBody }), c.updateOrderStatus);
